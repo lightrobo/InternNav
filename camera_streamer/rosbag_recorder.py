@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 """
-RealSense D435i RGBD + IMU -> ROS1 Bag 录制工具
+RealSense D435i RGBD + IMU -> ROS2 Bag 录制工具
 
-将 RealSense 的 RGB、Depth、Accel、Gyro 数据保存为 rosbag 格式
-无需运行 ROS Master，直接使用 rosbag Python API
+将 RealSense 的 RGB、Depth、Accel、Gyro 数据保存为 rosbag2 格式
+无需运行 ROS2 节点，直接使用 rosbag2_py API
 
 依赖：
-    pip install pyrealsense2 rosbag rospkg
-    # 如果没有 ROS 环境，需要额外安装：
-    pip install sensor-msgs-py  # 或从 ROS 安装
+    pip install pyrealsense2
+    # ROS2 环境: source /opt/ros/humble/setup.bash
 
 用法：
-    python rosbag_recorder.py --output ./data/test.bag
-    python rosbag_recorder.py --output ./data/test.bag --no-imu  # 仅 RGBD
-    python rosbag_recorder.py --output ./data/test.bag --duration 60  # 录制60秒
+    python rosbag_recorder.py --output ./data/test
+    python rosbag_recorder.py --output ./data/test --no-imu  # 仅 RGBD
+    python rosbag_recorder.py --output ./data/test --duration 60  # 录制60秒
 
 作者：InternNav Team
 """
@@ -30,23 +29,23 @@ from threading import Event
 import numpy as np
 import pyrealsense2 as rs
 
-# ROS 相关导入
+# ROS2 相关导入
 try:
-    import rosbag
-    import rospy
+    import rosbag2_py
+    from rclpy.serialization import serialize_message
     from sensor_msgs.msg import Image, Imu, CameraInfo
     from std_msgs.msg import Header
+    from builtin_interfaces.msg import Time
     from geometry_msgs.msg import Vector3
     HAS_ROS = True
-except ImportError:
+except ImportError as e:
     HAS_ROS = False
-    print("[ERROR] ROS 依赖未安装！")
-    print("请安装: pip install rosbag rospkg")
-    print("或在 ROS 环境中运行此脚本")
+    print(f"[ERROR] ROS2 依赖未安装！{e}")
+    print("请确保已 source ROS2 环境: source /opt/ros/humble/setup.bash")
 
 
-class RosbagRecorder:
-    """RealSense D435i RGBD+IMU 录制到 rosbag"""
+class Rosbag2Recorder:
+    """RealSense D435i RGBD+IMU 录制到 rosbag2"""
 
     def __init__(
         self,
@@ -70,8 +69,8 @@ class RosbagRecorder:
         self.align: Optional[rs.align] = None
         self.depth_scale: float = 0.001
 
-        # ROS bag
-        self.bag: Optional[rosbag.Bag] = None
+        # ROS2 bag writer
+        self.writer: Optional[rosbag2_py.SequentialWriter] = None
 
         # 统计
         self.frame_count = 0
@@ -99,10 +98,16 @@ class RosbagRecorder:
         serial = device.get_info(rs.camera_info.serial_number)
         print(f"[REC] 检测到设备: {name} (SN: {serial})")
 
-        # D435i/D455 有 IMU，D435 没有
-        has_imu = 'D435i' in name or 'D455' in name or 'D405' in name
+        # 实际检测设备是否有 motion 传感器（而不是靠名字猜）
+        has_imu = False
+        for sensor in device.sensors:
+            if sensor.is_motion_sensor():
+                has_imu = True
+                print(f"[REC] 检测到 IMU 传感器: {sensor.get_info(rs.camera_info.name)}")
+                break
+        
         if self.enable_imu and not has_imu:
-            print(f"[REC] ⚠️  警告: {name} 不支持 IMU，将仅录制 RGBD")
+            print(f"[REC] ⚠️  警告: {name} 未检测到 IMU 传感器，将仅录制 RGBD")
             self.enable_imu = False
 
         return True, has_imu
@@ -172,22 +177,71 @@ class RosbagRecorder:
             return False
 
     def open_bag(self) -> bool:
-        """打开 rosbag 文件"""
+        """打开 rosbag2 文件"""
         try:
             # 确保目录存在
             os.makedirs(os.path.dirname(os.path.abspath(self.output_path)), exist_ok=True)
             
-            self.bag = rosbag.Bag(self.output_path, 'w')
-            print(f"[REC] 创建 bag 文件: {self.output_path}")
+            # 创建 writer
+            self.writer = rosbag2_py.SequentialWriter()
+            
+            storage_options = rosbag2_py.StorageOptions(
+                uri=self.output_path,
+                storage_id='sqlite3'
+            )
+            converter_options = rosbag2_py.ConverterOptions(
+                input_serialization_format='cdr',
+                output_serialization_format='cdr'
+            )
+            
+            self.writer.open(storage_options, converter_options)
+            
+            # 创建 topics
+            self._create_topics()
+            
+            print(f"[REC] 创建 bag 目录: {self.output_path}")
             return True
         except Exception as e:
             print(f"[REC] ❌ 创建 bag 文件失败: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
+    def _create_topics(self):
+        """创建所有 topics"""
+        topics = [
+            ('/camera/color/image_raw', 'sensor_msgs/msg/Image'),
+            ('/camera/depth/image_raw', 'sensor_msgs/msg/Image'),
+            ('/camera/color/camera_info', 'sensor_msgs/msg/CameraInfo'),
+            ('/camera/depth/camera_info', 'sensor_msgs/msg/CameraInfo'),
+        ]
+        
+        if self.enable_imu:
+            topics.extend([
+                ('/camera/accel/sample', 'sensor_msgs/msg/Imu'),
+                ('/camera/gyro/sample', 'sensor_msgs/msg/Imu'),
+                ('/camera/imu', 'sensor_msgs/msg/Imu'),
+            ])
+        
+        for topic_name, topic_type in topics:
+            topic_info = rosbag2_py.TopicMetadata(
+                name=topic_name,
+                type=topic_type,
+                serialization_format='cdr'
+            )
+            self.writer.create_topic(topic_info)
+
+    def _time_to_stamp(self, timestamp: float) -> Time:
+        """将 float 时间戳转为 ROS2 Time"""
+        stamp = Time()
+        stamp.sec = int(timestamp)
+        stamp.nanosec = int((timestamp - stamp.sec) * 1e9)
+        return stamp
+
     def _create_header(self, timestamp: float, frame_id: str) -> Header:
-        """创建 ROS Header"""
+        """创建 ROS2 Header"""
         header = Header()
-        header.stamp = rospy.Time.from_sec(timestamp)
+        header.stamp = self._time_to_stamp(timestamp)
         header.frame_id = frame_id
         return header
 
@@ -223,18 +277,18 @@ class RosbagRecorder:
         msg.distortion_model = "plumb_bob"
         
         # 畸变系数 [k1, k2, p1, p2, k3]
-        msg.D = list(intrinsics.coeffs)
+        msg.d = list(intrinsics.coeffs)
         
         # 内参矩阵 K (3x3)
         fx, fy = intrinsics.fx, intrinsics.fy
         cx, cy = intrinsics.ppx, intrinsics.ppy
-        msg.K = [fx, 0, cx, 0, fy, cy, 0, 0, 1]
+        msg.k = [fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0]
         
         # 整流矩阵 R (单位矩阵)
-        msg.R = [1, 0, 0, 0, 1, 0, 0, 0, 1]
+        msg.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
         
         # 投影矩阵 P (3x4)
-        msg.P = [fx, 0, cx, 0, 0, fy, cy, 0, 0, 0, 1, 0]
+        msg.p = [fx, 0.0, cx, 0.0, 0.0, fy, cy, 0.0, 0.0, 0.0, 1.0, 0.0]
         
         return msg
 
@@ -250,22 +304,27 @@ class RosbagRecorder:
 
         # 加速度 (m/s^2)
         if accel_data:
-            msg.linear_acceleration.x = accel_data[0]
-            msg.linear_acceleration.y = accel_data[1]
-            msg.linear_acceleration.z = accel_data[2]
+            msg.linear_acceleration.x = float(accel_data[0])
+            msg.linear_acceleration.y = float(accel_data[1])
+            msg.linear_acceleration.z = float(accel_data[2])
 
         # 角速度 (rad/s)
         if gyro_data:
-            msg.angular_velocity.x = gyro_data[0]
-            msg.angular_velocity.y = gyro_data[1]
-            msg.angular_velocity.z = gyro_data[2]
+            msg.angular_velocity.x = float(gyro_data[0])
+            msg.angular_velocity.y = float(gyro_data[1])
+            msg.angular_velocity.z = float(gyro_data[2])
 
         # 协方差（未知，设为 -1）
-        msg.orientation_covariance[0] = -1
-        msg.angular_velocity_covariance[0] = -1 if not gyro_data else 0
-        msg.linear_acceleration_covariance[0] = -1 if not accel_data else 0
+        msg.orientation_covariance[0] = -1.0
+        msg.angular_velocity_covariance[0] = -1.0 if not gyro_data else 0.0
+        msg.linear_acceleration_covariance[0] = -1.0 if not accel_data else 0.0
 
         return msg
+
+    def _write_message(self, topic: str, msg, timestamp_ns: int):
+        """写入消息到 bag"""
+        serialized_msg = serialize_message(msg)
+        self.writer.write(topic, serialized_msg, timestamp_ns)
 
     def record(self, duration: Optional[float] = None):
         """
@@ -275,7 +334,7 @@ class RosbagRecorder:
             duration: 录制时长（秒），None 表示持续录制直到手动停止
         """
         if not HAS_ROS:
-            print("[REC] ❌ ROS 依赖不可用")
+            print("[REC] ❌ ROS2 依赖不可用")
             return
 
         if not self.open_camera():
@@ -310,10 +369,10 @@ class RosbagRecorder:
                     print(f"\n[REC] 达到指定时长 {duration} 秒")
                     break
 
-                # 获取帧（非阻塞方式获取所有可用帧）
+                # 获取帧
                 frames = self.pipeline.wait_for_frames(timeout_ms=1000)
                 timestamp = time.time()
-                ros_time = rospy.Time.from_sec(timestamp)
+                timestamp_ns = int(timestamp * 1e9)
 
                 # 处理 IMU 数据（高频率）
                 if self.enable_imu:
@@ -325,7 +384,7 @@ class RosbagRecorder:
                         
                         # 创建仅有加速度的 IMU 消息
                         imu_msg = self._create_imu_msg(last_accel, None, timestamp)
-                        self.bag.write('/camera/accel/sample', imu_msg, ros_time)
+                        self._write_message('/camera/accel/sample', imu_msg, timestamp_ns)
                         self.imu_count += 1
 
                     # 陀螺仪
@@ -336,13 +395,13 @@ class RosbagRecorder:
                         
                         # 创建仅有角速度的 IMU 消息
                         imu_msg = self._create_imu_msg(None, last_gyro, timestamp)
-                        self.bag.write('/camera/gyro/sample', imu_msg, ros_time)
+                        self._write_message('/camera/gyro/sample', imu_msg, timestamp_ns)
                         self.imu_count += 1
 
                     # 合并的 IMU 消息（用最近的数据）
                     if last_accel and last_gyro:
                         imu_msg = self._create_imu_msg(last_accel, last_gyro, timestamp)
-                        self.bag.write('/camera/imu', imu_msg, ros_time)
+                        self._write_message('/camera/imu', imu_msg, timestamp_ns)
 
                 # 处理图像数据
                 if self.align:
@@ -357,14 +416,14 @@ class RosbagRecorder:
                     color_msg = self._create_image_msg(
                         color_data, timestamp, "camera_color_optical_frame", "rgb8"
                     )
-                    self.bag.write('/camera/color/image_raw', color_msg, ros_time)
+                    self._write_message('/camera/color/image_raw', color_msg, timestamp_ns)
 
                     # 深度图像
                     depth_data = np.asanyarray(depth_frame.get_data())
                     depth_msg = self._create_image_msg(
                         depth_data, timestamp, "camera_depth_optical_frame", "16UC1"
                     )
-                    self.bag.write('/camera/depth/image_raw', depth_msg, ros_time)
+                    self._write_message('/camera/depth/image_raw', depth_msg, timestamp_ns)
 
                     # 相机内参
                     color_info = self._create_camera_info(
@@ -373,8 +432,8 @@ class RosbagRecorder:
                     depth_info = self._create_camera_info(
                         self.depth_intrinsics, timestamp, "camera_depth_optical_frame"
                     )
-                    self.bag.write('/camera/color/camera_info', color_info, ros_time)
-                    self.bag.write('/camera/depth/camera_info', depth_info, ros_time)
+                    self._write_message('/camera/color/camera_info', color_info, timestamp_ns)
+                    self._write_message('/camera/depth/camera_info', depth_info, timestamp_ns)
 
                     self.frame_count += 1
 
@@ -395,6 +454,8 @@ class RosbagRecorder:
 
         except Exception as e:
             print(f"\n[REC] ❌ 录制错误: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             self.close()
 
@@ -402,16 +463,24 @@ class RosbagRecorder:
         """关闭资源"""
         print("\n[REC] 正在保存...")
         
-        if self.bag:
-            self.bag.close()
+        if self.writer:
+            del self.writer
+            self.writer = None
             
             # 打印统计
-            file_size = os.path.getsize(self.output_path)
             duration = time.time() - self.start_time
             
+            # 获取 bag 目录大小
+            total_size = 0
+            if os.path.isdir(self.output_path):
+                for f in os.listdir(self.output_path):
+                    fp = os.path.join(self.output_path, f)
+                    if os.path.isfile(fp):
+                        total_size += os.path.getsize(fp)
+            
             print(f"[REC] ✅ 录制完成!")
-            print(f"    文件: {self.output_path}")
-            print(f"    大小: {file_size / 1024 / 1024:.2f} MB")
+            print(f"    目录: {self.output_path}")
+            print(f"    大小: {total_size / 1024 / 1024:.2f} MB")
             print(f"    时长: {duration:.1f} 秒")
             print(f"    帧数: {self.frame_count}")
             if self.enable_imu:
@@ -423,29 +492,32 @@ class RosbagRecorder:
 
 def main():
     parser = argparse.ArgumentParser(
-        description='RealSense D435i RGBD+IMU -> ROS bag 录制工具',
+        description='RealSense D435i RGBD+IMU -> ROS2 bag 录制工具',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 示例:
-    # 基本录制
-    python rosbag_recorder.py -o ./data/test.bag
+    # 基本录制 (输出为目录，不需要 .bag 后缀)
+    python rosbag_recorder.py -o ./data/test
     
     # 录制 60 秒
-    python rosbag_recorder.py -o ./data/test.bag -d 60
+    python rosbag_recorder.py -o ./data/test -d 60
     
     # 仅录制 RGBD（无 IMU）
-    python rosbag_recorder.py -o ./data/test.bag --no-imu
+    python rosbag_recorder.py -o ./data/test --no-imu
     
     # 高分辨率录制
-    python rosbag_recorder.py -o ./data/hd.bag -W 1280 -H 720 --fps 15
+    python rosbag_recorder.py -o ./data/hd --fps 15 -W 1280 -H 720
+    
+回放:
+    ros2 bag play ./data/test
 '''
     )
     
     parser.add_argument(
         '-o', '--output',
         type=str,
-        default=f'./data/realsense_{datetime.now().strftime("%Y%m%d_%H%M%S")}.bag',
-        help='输出 bag 文件路径 (默认: ./data/realsense_YYYYMMDD_HHMMSS.bag)'
+        default=f'./data/realsense_{datetime.now().strftime("%Y%m%d_%H%M%S")}',
+        help='输出 bag 目录路径 (默认: ./data/realsense_YYYYMMDD_HHMMSS)'
     )
     parser.add_argument(
         '-d', '--duration',
@@ -485,13 +557,12 @@ def main():
     args = parser.parse_args()
 
     if not HAS_ROS:
-        print("\n[ERROR] 无法导入 ROS 依赖，请确保：")
-        print("  1. 已安装 ROS (推荐 ROS Noetic)")
-        print("  2. 已 source ROS 环境: source /opt/ros/noetic/setup.bash")
-        print("  3. 或安装独立包: pip install rosbag rospkg")
+        print("\n[ERROR] 无法导入 ROS2 依赖，请确保：")
+        print("  1. 已安装 ROS2 Humble")
+        print("  2. 已 source ROS2 环境: source /opt/ros/humble/setup.bash")
         sys.exit(1)
 
-    recorder = RosbagRecorder(
+    recorder = Rosbag2Recorder(
         output_path=args.output,
         width=args.width,
         height=args.height,
