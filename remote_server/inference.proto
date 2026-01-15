@@ -17,7 +17,7 @@ service InferenceService {
 message Empty {}
 
 message InferRequest {
-    // JPEG编码的图像数据
+    // JPEG编码的RGB图像数据
     bytes image_data = 1;
     
     // 文本指令
@@ -28,6 +28,16 @@ message InferRequest {
     
     // 时间戳（毫秒）
     int64 timestamp_ms = 4;
+    
+    // PNG编码的深度图像数据（16bit单通道，保留精度）
+    bytes depth_data = 5;
+    
+    // 深度图尺寸
+    int32 depth_width = 6;
+    int32 depth_height = 7;
+    
+    // 深度比例因子（depth_value * scale = 米）
+    float depth_scale = 8;
 }
 
 message InferResponse {
