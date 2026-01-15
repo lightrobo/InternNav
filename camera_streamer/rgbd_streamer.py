@@ -18,6 +18,8 @@ import numpy as np
 from typing import Optional, Tuple
 from threading import Thread, Lock
 import math
+import json
+import os
 
 # RealSense
 import pyrealsense2 as rs
@@ -47,6 +49,7 @@ class RGBDStreamer:
         self.jpeg_quality = jpeg_quality
         self.http_port = http_port
         self.align_depth = align_depth
+        self.config_path = config_path
         
         self.channel = None
         self.stub = None
@@ -83,6 +86,55 @@ class RGBDStreamer:
             print(f"[RGBD] 连接失败: {e}")
             return False
     
+    def load_config(self, device) -> dict:
+        """加载JSON配置文件"""
+        if not self.config_path:
+            return None
+        
+        if not os.path.exists(self.config_path):
+            print(f"[RGBD] 警告: 配置文件不存在: {self.config_path}")
+            return None
+        
+        try:
+            with open(self.config_path, 'r') as f:
+                config_data = json.load(f)
+            
+            print(f"[RGBD] 加载配置文件: {self.config_path}")
+            
+            # 从配置中读取分辨率和帧率
+            if 'viewer' in config_data:
+                viewer = config_data['viewer']
+                if 'stream-width' in viewer:
+                    self.width = int(viewer['stream-width'])
+                if 'stream-height' in viewer:
+                    self.height = int(viewer['stream-height'])
+                if 'stream-fps' in viewer:
+                    self.fps = int(viewer['stream-fps'])
+                print(f"[RGBD] 配置分辨率: {self.width}x{self.height} @ {self.fps}fps")
+            
+            # 应用 Advanced Mode 配置
+            try:
+                advanced = rs.rs400_advanced_mode(device)
+                if not advanced.is_enabled():
+                    print("[RGBD] 启用 Advanced Mode...")
+                    advanced.toggle_advanced_mode(True)
+                    # 需要重新获取设备
+                    import time
+                    time.sleep(2)
+                    return config_data  # 返回配置，稍后重新应用
+                
+                # 加载JSON配置到设备
+                advanced.load_json(json.dumps(config_data))
+                print("[RGBD] ✅ Advanced Mode 配置已应用")
+            except Exception as e:
+                print(f"[RGBD] Advanced Mode 配置失败 (可忽略): {e}")
+            
+            return config_data
+            
+        except Exception as e:
+            print(f"[RGBD] 加载配置文件失败: {e}")
+            return None
+    
     def open_camera(self) -> bool:
         """打开RealSense D435"""
         print(f"[RGBD] 初始化 RealSense D435...")
@@ -103,6 +155,9 @@ class RGBDStreamer:
             serial = device.get_info(rs.camera_info.serial_number)
             name = device.get_info(rs.camera_info.name)
             print(f"[RGBD] 检测到设备: {name} (SN: {serial})")
+            
+            # 加载配置文件（会更新self.width/height/fps）
+            self.load_config(device)
             
             # 配置RGB和Depth流
             self.config.enable_stream(rs.stream.color, self.width, self.height, rs.format.bgr8, self.fps)
@@ -575,11 +630,15 @@ class RGBDStreamer:
 
 
 if __name__ == '__main__':
+    # 获取脚本所在目录
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+    DEFAULT_CONFIG = os.path.join(SCRIPT_DIR, 'config', 'config1.json')
+    
     parser = argparse.ArgumentParser(description='AGX Orin RealSense D435 RGBD采集端')
     parser.add_argument('--server', type=str, default='localhost:50051', help='gRPC服务器地址')
-    parser.add_argument('--width', type=int, default=640, help='图像宽度')
-    parser.add_argument('--height', type=int, default=480, help='图像高度')
-    parser.add_argument('--fps', type=int, default=15, help='目标帧率')
+    parser.add_argument('--width', type=int, default=848, help='图像宽度 (会被配置文件覆盖)')
+    parser.add_argument('--height', type=int, default=480, help='图像高度 (会被配置文件覆盖)')
+    parser.add_argument('--fps', type=int, default=30, help='目标帧率 (会被配置文件覆盖)')
     parser.add_argument('--quality', type=int, default=80, help='JPEG质量 (1-100)')
     parser.add_argument('--instruction', type=str, default='Follow the person', help='文本指令')
     parser.add_argument('--no-display', action='store_true', help='不显示画面（headless模式）')
@@ -587,8 +646,12 @@ if __name__ == '__main__':
     parser.add_argument('--http-port', type=int, default=8080, help='HTTP流端口')
     parser.add_argument('--no-align', action='store_true', help='不对齐深度图到RGB')
     parser.add_argument('--no-infer', action='store_true', help='预览模式：不连接服务器')
+    parser.add_argument('--config', type=str, default=DEFAULT_CONFIG, help='RealSense配置文件路径')
+    parser.add_argument('--no-config', action='store_true', help='不加载配置文件')
     
     args = parser.parse_args()
+    
+    config_path = None if args.no_config else args.config
     
     streamer = RGBDStreamer(
         server_addr=args.server,
@@ -598,6 +661,7 @@ if __name__ == '__main__':
         jpeg_quality=args.quality,
         http_port=args.http_port,
         align_depth=not args.no_align,
+        config_path=config_path,
     )
     
     streamer.run(

@@ -14,7 +14,12 @@ HTTP_STREAM=true                # 是否启用HTTP视频流
 HTTP_PORT=8080                  # HTTP流端口
 NO_INFER=false                  # 预览模式（不连接服务器）
 ALIGN_DEPTH=true                # 是否对齐深度图到RGB
+NO_CONFIG=false                 # 是否禁用配置文件
+CONFIG_PATH=""                  # 自定义配置文件路径（为空则使用默认）
 # ================================
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_CONFIG="${SCRIPT_DIR}/config/config1.json"
 
 # 解析命令行参数
 while [[ $# -gt 0 ]]; do
@@ -55,17 +60,13 @@ while [[ $# -gt 0 ]]; do
             ALIGN_DEPTH=false
             shift
             ;;
-        --width)
-            WIDTH="$2"
+        --config)
+            CONFIG_PATH="$2"
             shift 2
             ;;
-        --height)
-            HEIGHT="$2"
-            shift 2
-            ;;
-        --fps)
-            FPS="$2"
-            shift 2
+        --no-config)
+            NO_CONFIG=true
+            shift
             ;;
         *)
             shift
@@ -73,7 +74,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 确定使用的配置文件
+if [ "${NO_CONFIG}" = false ]; then
+    if [ -z "${CONFIG_PATH}" ]; then
+        CONFIG_PATH="${DEFAULT_CONFIG}"
+    fi
+fi
 
 echo "=========================================="
 echo "  RealSense D435 RGBD Streamer"
@@ -85,8 +91,11 @@ if [ "${NO_INFER}" = false ]; then
 else
     echo "  服务器地址:   (预览模式，不连接)"
 fi
-echo "  分辨率:       ${WIDTH}x${HEIGHT}"
-echo "  帧率:         ${FPS} fps"
+if [ "${NO_CONFIG}" = false ]; then
+    echo "  配置文件:     ${CONFIG_PATH}"
+else
+    echo "  配置文件:     (未启用)"
+fi
 echo "  JPEG质量:     ${JPEG_QUALITY}"
 echo "  指令:         ${INSTRUCTION}"
 echo "  无头模式:     ${HEADLESS}"
@@ -100,9 +109,6 @@ echo ""
 # 构建命令
 CMD="python3 ${SCRIPT_DIR}/rgbd_streamer.py"
 CMD="${CMD} --server ${SERVER_ADDR}"
-CMD="${CMD} --width ${WIDTH}"
-CMD="${CMD} --height ${HEIGHT}"
-CMD="${CMD} --fps ${FPS}"
 CMD="${CMD} --quality ${JPEG_QUALITY}"
 CMD="${CMD} --instruction \"${INSTRUCTION}\""
 
@@ -120,6 +126,12 @@ fi
 
 if [ "${ALIGN_DEPTH}" = false ]; then
     CMD="${CMD} --no-align"
+fi
+
+if [ "${NO_CONFIG}" = true ]; then
+    CMD="${CMD} --no-config"
+elif [ -n "${CONFIG_PATH}" ]; then
+    CMD="${CMD} --config \"${CONFIG_PATH}\""
 fi
 
 echo "执行命令:"
