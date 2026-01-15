@@ -41,6 +41,7 @@ class RGBDStreamer:
         jpeg_quality: int = 80,
         http_port: int = 8080,
         align_depth: bool = True,
+        config_path: str = None,
     ):
         self.server_addr = server_addr
         self.width = width
