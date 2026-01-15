@@ -6,7 +6,7 @@ set -e
 
 # 默认参数
 HOST="${HOST:-0.0.0.0}"
-PORT="${PORT:-8087}"
+PORT="${PORT:-50051}"
 MODEL_DIR="${HF_MODEL_DIR:-}"
 DEVICE="${DEVICE:-cuda}"
 
