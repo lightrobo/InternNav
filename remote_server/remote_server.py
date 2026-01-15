@@ -34,7 +34,7 @@ import vln_agent  # noqa: F401
 def main():
     parser = argparse.ArgumentParser(description='VLN 云端推理服务器 (基于 InternNav)')
     parser.add_argument('--host', type=str, default='0.0.0.0', help='服务器监听地址')
-    parser.add_argument('--port', type=int, default=50051, help='服务器端口')
+    parser.add_argument('--port', type=int, default=50052, help='服务器端口')
     parser.add_argument('--reload', action='store_true', help='开发模式：自动重载')
     
     args = parser.parse_args()
