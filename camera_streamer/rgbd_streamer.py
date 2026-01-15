@@ -636,7 +636,7 @@ if __name__ == '__main__':
     DEFAULT_CONFIG = os.path.join(SCRIPT_DIR, 'config', 'config1.json')
     
     parser = argparse.ArgumentParser(description='AGX Orin RealSense D435 RGBD采集端')
-    parser.add_argument('--server', type=str, default='localhost:50051', help='gRPC服务器地址')
+    parser.add_argument('--server', type=str, default='localhost:50100', help='gRPC服务器地址')
     parser.add_argument('--width', type=int, default=848, help='图像宽度 (会被配置文件覆盖)')
     parser.add_argument('--height', type=int, default=480, help='图像高度 (会被配置文件覆盖)')
     parser.add_argument('--fps', type=int, default=30, help='目标帧率 (会被配置文件覆盖)')

@@ -401,7 +401,7 @@ class CameraStreamer:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='AGX Orin 摄像头采集端')
-    parser.add_argument('--server', type=str, default='localhost:50051', help='gRPC服务器地址')
+    parser.add_argument('--server', type=str, default='localhost:50100', help='gRPC服务器地址')
     parser.add_argument('--camera', type=int, default=0, help='摄像头索引')
     parser.add_argument('--width', type=int, default=640, help='图像宽度')
     parser.add_argument('--height', type=int, default=480, help='图像高度')

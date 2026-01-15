@@ -6,7 +6,7 @@
 REMOTE_USER="root"          # 云端用户名
 REMOTE_HOST="10.4.14.165"  # 云端服务器地址
 REMOTE_PORT=50052                    # 云端gRPC端口
-LOCAL_PORT=50052                     # 本地暴露端口
+LOCAL_PORT=50100                     # 本地暴露端口
 SSH_PORT=2222                          # SSH端口
 
 # 可选：SSH密钥路径

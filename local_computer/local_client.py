@@ -158,7 +158,7 @@ def test_latency(stub, iterations: int = 10):
 
 def main():
     parser = argparse.ArgumentParser(description='gRPC推理测试客户端')
-    parser.add_argument('--server', type=str, default='localhost:50051', help='gRPC服务器地址')
+    parser.add_argument('--server', type=str, default='localhost:50100', help='gRPC服务器地址')
     parser.add_argument('--image', type=str, help='测试图片路径')
     parser.add_argument('--video', type=str, help='测试视频路径')
     parser.add_argument('--instruction', type=str, default='Follow the person', help='文本指令')
