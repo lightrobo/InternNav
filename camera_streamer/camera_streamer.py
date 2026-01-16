@@ -439,16 +439,23 @@ class CameraStreamer:
                     vis = self.draw_trajectory(frame, waypoints)
                     
                     # 发布速度命令到 ROS2
+                    # InternNav waypoints 格式: [x, y, theta]
+                    # - x, y: 位移（米），模型输出已经除以4
+                    # - theta: 朝向角（弧度）
+                    # 按 InternNav 原版: linear_vel = ||(x,y)||, angular_vel = theta, clip到[-0.5, 0.5]
                     if self.enable_ros2 and self._ros2_node is not None and len(waypoints) > 0:
-                        # 优先用 waypoints[1]，如果只有1个则用 waypoints[0]
-                        wp_idx = 1 if len(waypoints) > 1 else 0
-                        x, y, theta = waypoints[wp_idx]
-                        # waypoints 是累积位移，转换为速度：速度 = 位移 / 时间尺度
-                        linear_x = x / self.vel_time_scale
-                        linear_y = y / self.vel_time_scale
-                        angular_z = theta / self.vel_time_scale
-                        self._ros2_node.update_velocity(linear_x, linear_y, angular_z)
-                        print(f"[Client ROS2] 发布: vx={linear_x:.3f} vy={linear_y:.3f} wz={angular_z:.3f} (from wp[{wp_idx}])")
+                        # 用最后一个 waypoint（原版是 trajectory[-1]）
+                        x, y, theta = waypoints[-1]
+                        # linear_vel = L2范数，angular_vel = theta
+                        linear_vel = np.linalg.norm([x, y])
+                        angular_vel = theta
+                        # clip 到合理范围
+                        linear_vel = np.clip(linear_vel, 0, 0.5)
+                        angular_vel = np.clip(angular_vel, -0.5, 0.5)
+                        # 发布: [linear_x, linear_y, angular_z]
+                        # 注意: 这里假设机器人主要向前走，所以 linear_x = linear_vel, linear_y = 0
+                        self._ros2_node.update_velocity(linear_vel, 0.0, angular_vel)
+                        print(f"[Client ROS2] 发布: vx={linear_vel:.3f} vy=0.000 wz={angular_vel:.3f} (wp[-1]: x={x:.3f} y={y:.3f} th={theta:.3f})")
                     
                     # 显示信息
                     info = f"RTT: {rtt:.0f}ms | Server: {server_time:.0f}ms | Frame: {self.frame_id}"
