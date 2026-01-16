@@ -11,10 +11,11 @@ WIDTH=640                       # 图像宽度
 HEIGHT=480                      # 图像高度
 FPS=10                          # 目标帧率
 JPEG_QUALITY=80                 # JPEG压缩质量 (1-100)
-INSTRUCTION="去前面那个黑色椅子旁边" # 文本指令
+INSTRUCTION="往前右拐走到门口再左转穿过一个走廊到厨房" # 文本指令
 HEADLESS=true                   # 是否无头模式（不显示画面）
 HTTP_STREAM=true                # 是否启用HTTP视频流
 HTTP_PORT=8080                  # HTTP流端口
+VEL_TIME_SCALE=2              # waypoint位移到速度的时间尺度（秒）
 # ================================
 
 # 解析命令行参数
@@ -52,6 +53,10 @@ while [[ $# -gt 0 ]]; do
             INSTRUCTION="$2"
             shift 2
             ;;
+        --vel-time-scale)
+            VEL_TIME_SCALE="$2"
+            shift 2
+            ;;
         *)
             shift
             ;;
@@ -76,6 +81,7 @@ echo "  HTTP视频流:   ${HTTP_STREAM}"
 if [ "${HTTP_STREAM}" = true ]; then
     echo "  HTTP端口:     ${HTTP_PORT}"
 fi
+echo "  速度时间尺度: ${VEL_TIME_SCALE}s"
 echo ""
 
 # 构建命令
@@ -87,6 +93,7 @@ CMD="${CMD} --height ${HEIGHT}"
 CMD="${CMD} --fps ${FPS}"
 CMD="${CMD} --quality ${JPEG_QUALITY}"
 CMD="${CMD} --instruction \"${INSTRUCTION}\""
+CMD="${CMD} --vel-time-scale ${VEL_TIME_SCALE}"
 
 if [ "${HEADLESS}" = true ]; then
     CMD="${CMD} --no-display"

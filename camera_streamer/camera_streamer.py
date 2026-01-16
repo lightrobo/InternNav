@@ -439,15 +439,16 @@ class CameraStreamer:
                     vis = self.draw_trajectory(frame, waypoints)
                     
                     # 发布速度命令到 ROS2
-                    # 注意：使用 waypoints[1]（第 2 个 waypoint），与 trained_agent.py 的 _planner_action 一致
-                    if self.enable_ros2 and self._ros2_node is not None and len(waypoints) > 1:
-                        x, y, theta = waypoints[1]
+                    if self.enable_ros2 and self._ros2_node is not None and len(waypoints) > 0:
+                        # 优先用 waypoints[1]，如果只有1个则用 waypoints[0]
+                        wp_idx = 1 if len(waypoints) > 1 else 0
+                        x, y, theta = waypoints[wp_idx]
                         # waypoints 是累积位移，转换为速度：速度 = 位移 / 时间尺度
-                        # dt = 0.1 秒，与 trained_agent.py 中的 dt 一致
                         linear_x = x / self.vel_time_scale
                         linear_y = y / self.vel_time_scale
                         angular_z = theta / self.vel_time_scale
                         self._ros2_node.update_velocity(linear_x, linear_y, angular_z)
+                        print(f"[Client ROS2] 发布: vx={linear_x:.3f} vy={linear_y:.3f} wz={angular_z:.3f} (from wp[{wp_idx}])")
                     
                     # 显示信息
                     info = f"RTT: {rtt:.0f}ms | Server: {server_time:.0f}ms | Frame: {self.frame_id}"
