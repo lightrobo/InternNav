@@ -23,6 +23,44 @@ import math
 import inference_pb2
 import inference_pb2_grpc
 
+# ROS2 导入
+try:
+    import rclpy
+    from rclpy.node import Node
+    from std_msgs.msg import Float32MultiArray
+    ROS2_AVAILABLE = True
+except ImportError:
+    ROS2_AVAILABLE = False
+    print("[Client] 警告: ROS2 未安装，运动控制功能不可用")
+    print("[Client] 安装: sudo apt install ros-humble-rclpy ros-humble-std-msgs")
+
+
+class MotionPublisher(Node):
+    """ROS2 节点：发布速度命令到 /motion_ref"""
+    
+    def __init__(self):
+        super().__init__('intern_nav_motion_publisher')
+        self._publisher = self.create_publisher(Float32MultiArray, '/motion_ref', 1)
+        self._vel_cmd_lock = Lock()
+        self._vel_cmd = [0.0, 0.0, 0.0]  # [linear_x, linear_y, angular_z]
+        self._publish_rate = 50.0  # Hz
+        self._timer = self.create_timer(1.0 / self._publish_rate, self._timer_callback)
+        self.get_logger().info(f'MotionPublisher 已启动，发布频率: {self._publish_rate}Hz')
+    
+    def update_velocity(self, linear_x: float, linear_y: float, angular_z: float):
+        """更新速度命令"""
+        with self._vel_cmd_lock:
+            self._vel_cmd = [linear_x, linear_y, angular_z]
+    
+    def _timer_callback(self):
+        """定时发布速度命令"""
+        with self._vel_cmd_lock:
+            vel_cmd = self._vel_cmd.copy()
+        
+        msg = Float32MultiArray()
+        msg.data = vel_cmd
+        self._publisher.publish(msg)
+
 
 class CameraStreamer:
     """摄像头采集 + gRPC 客户端 + HTTP 视频流"""
@@ -35,7 +73,9 @@ class CameraStreamer:
         height: int = 480,
         fps: int = 10,
         jpeg_quality: int = 80,
-        http_port: int = 8080
+        http_port: int = 8080,
+        enable_ros2: bool = True,
+        vel_time_scale: float = 0.1
     ):
         self.server_addr = server_addr
         self.camera_idx = camera_idx
@@ -44,6 +84,8 @@ class CameraStreamer:
         self.fps = fps
         self.jpeg_quality = jpeg_quality
         self.http_port = http_port
+        self.enable_ros2 = enable_ros2 and ROS2_AVAILABLE
+        self.vel_time_scale = vel_time_scale  # waypoint位移到速度的转换时间尺度
         
         self.channel = None
         self.stub = None
@@ -54,6 +96,11 @@ class CameraStreamer:
         self._current_frame = None
         self._frame_lock = Lock()
         self._http_server = None
+        
+        # ROS2 相关
+        self._ros2_node = None
+        self._ros2_thread = None
+        self._rclpy_initialized = False
         
     def connect(self) -> bool:
         """连接gRPC服务器"""
@@ -319,6 +366,18 @@ class CameraStreamer:
         print(f"[Client] HTTP 视频流启动: http://0.0.0.0:{self.http_port}")
         app.run(host='0.0.0.0', port=self.http_port, threaded=True)
     
+    def _ros2_spin_thread(self):
+        """ROS2 spin 线程"""
+        try:
+            rclpy.spin(self._ros2_node)
+        except Exception as e:
+            print(f"[Client] ROS2 spin 错误: {e}")
+        finally:
+            if self._ros2_node:
+                self._ros2_node.destroy_node()
+            if self._rclpy_initialized:
+                rclpy.shutdown()
+    
     def run(self, instruction: str = "Follow the person", display: bool = True, http_stream: bool = False):
         """主循环"""
         if not self.connect():
@@ -326,6 +385,21 @@ class CameraStreamer:
         
         if not self.open_camera():
             return
+        
+        # 启动 ROS2 节点
+        if self.enable_ros2:
+            try:
+                if not self._rclpy_initialized:
+                    rclpy.init()
+                    self._rclpy_initialized = True
+                self._ros2_node = MotionPublisher()
+                self._ros2_thread = Thread(target=self._ros2_spin_thread, daemon=True)
+                self._ros2_thread.start()
+                print("[Client] ROS2 运动控制节点已启动，发布到 /motion_ref")
+                time.sleep(0.5)  # 等待节点初始化
+            except Exception as e:
+                print(f"[Client] ROS2 启动失败: {e}")
+                self.enable_ros2 = False
         
         # 启动 HTTP 流服务器
         if http_stream:
@@ -364,6 +438,17 @@ class CameraStreamer:
                     waypoints, server_time = result
                     vis = self.draw_trajectory(frame, waypoints)
                     
+                    # 发布速度命令到 ROS2
+                    # 注意：使用 waypoints[1]（第 2 个 waypoint），与 trained_agent.py 的 _planner_action 一致
+                    if self.enable_ros2 and self._ros2_node is not None and len(waypoints) > 1:
+                        x, y, theta = waypoints[1]
+                        # waypoints 是累积位移，转换为速度：速度 = 位移 / 时间尺度
+                        # dt = 0.1 秒，与 trained_agent.py 中的 dt 一致
+                        linear_x = x / self.vel_time_scale
+                        linear_y = y / self.vel_time_scale
+                        angular_z = theta / self.vel_time_scale
+                        self._ros2_node.update_velocity(linear_x, linear_y, angular_z)
+                    
                     # 显示信息
                     info = f"RTT: {rtt:.0f}ms | Server: {server_time:.0f}ms | Frame: {self.frame_id}"
                     cv2.putText(vis, info, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
@@ -396,6 +481,11 @@ class CameraStreamer:
     
     def close(self, display: bool = True):
         """清理资源"""
+        # 停止速度命令（发送零速度）
+        if self.enable_ros2 and self._ros2_node is not None:
+            self._ros2_node.update_velocity(0.0, 0.0, 0.0)
+            time.sleep(0.1)  # 确保最后一条消息发送
+        
         if self.cap:
             self.cap.release()
         if self.channel:
@@ -418,6 +508,8 @@ if __name__ == '__main__':
     parser.add_argument('--no-display', action='store_true', help='不显示画面（headless模式）')
     parser.add_argument('--http-stream', action='store_true', help='启用HTTP视频流（用于远程查看）')
     parser.add_argument('--http-port', type=int, default=8080, help='HTTP流端口')
+    parser.add_argument('--no-ros2', action='store_true', help='禁用ROS2运动控制')
+    parser.add_argument('--vel-time-scale', type=float, default=0.1, help='waypoint位移到速度的转换时间尺度（秒），默认0.1秒与trained_agent.py一致')
     
     args = parser.parse_args()
     
@@ -428,7 +520,9 @@ if __name__ == '__main__':
         height=args.height,
         fps=args.fps,
         jpeg_quality=args.quality,
-        http_port=args.http_port
+        http_port=args.http_port,
+        enable_ros2=not args.no_ros2,
+        vel_time_scale=args.vel_time_scale
     )
     
     streamer.run(
