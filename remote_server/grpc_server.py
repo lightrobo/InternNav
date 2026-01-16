@@ -201,6 +201,7 @@ class InferenceServicer(inference_pb2_grpc.InferenceServiceServicer):
                 n_waypoints = len(actions)
             
             print(f"[gRPC] 推理完成: {n_waypoints} waypoints, {inference_time:.0f}ms")
+            print(f"[gRPC] waypoints数据: {waypoints[:9] if len(waypoints) > 9 else waypoints}")  # 打印前3个点
             
             return inference_pb2.InferResponse(
                 frame_id=request.frame_id,

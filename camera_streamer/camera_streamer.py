@@ -123,8 +123,15 @@ class CameraStreamer:
             response = self.stub.Infer(request)
             
             if response.success:
+                # 调试：打印收到的原始数据
+                print(f"[Client DEBUG] 收到: n_waypoints={response.n_waypoints}, waypoints长度={len(response.waypoints)}, 前9个值={list(response.waypoints[:9]) if len(response.waypoints) > 0 else []}")
+                
                 # 服务器返回的是累积位移: [x, y, theta] * n_waypoints
-                waypoints = np.array(response.waypoints).reshape(response.n_waypoints, 3)
+                if response.n_waypoints > 0 and len(response.waypoints) >= response.n_waypoints * 3:
+                    waypoints = np.array(response.waypoints).reshape(response.n_waypoints, 3)
+                else:
+                    print(f"[Client] 警告: waypoints数据异常 - n_waypoints={response.n_waypoints}, 实际长度={len(response.waypoints)}")
+                    return None, 0
                 return waypoints, response.inference_time_ms
             else:
                 print(f"[Client] 推理错误: {response.error}")
