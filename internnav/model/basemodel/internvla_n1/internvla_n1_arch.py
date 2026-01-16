@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 
 LatentEmbSize = 768
-MODEL_PATH_TO = "checkpoints"
+MODEL_PATH_TO = "/lr-oss-all/resources/models/depth_anythingv2/Depth-Anything-V2-Metric-Hypersim-Small"
 
 
 def build_navdp(navdp_cfg, memory_size):
@@ -20,7 +20,7 @@ def build_traj_dit(config):
 
     from .nextdit_crossattn_traj import NextDiTCrossAttn, NextDiTCrossAttnConfig
 
-    dit = NextDiTCrossAttn(NextDiTCrossAttnConfig(latent_embedding_size=LatentEmbSize))
+    dit = NextDiTCrossAttn(NextDiTCrossAttnConfig(latent_embedding_size=LatentEmbSize, _gradient_checkpointing=False))
     noise_scheduler = FlowMatchEulerDiscreteScheduler()
     return dit, noise_scheduler
 
